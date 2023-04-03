@@ -201,8 +201,12 @@ class StarCraft2Env(MultiSidedMultiAgentEnv):
         # Map arguments
         self.map_name = map_name
         map_params = get_map_params(self.map_name)
-        self.n_agents = map_params["n_agents"]
-        self.n_enemies = map_params["n_enemies"]
+        if train_enemies:
+            self.n_agents = map_params["n_enemies"]
+            self.n_enemies = map_params["n_agents"]
+        else:
+            self.n_agents = map_params["n_agents"]
+            self.n_enemies = map_params["n_enemies"]
         self.episode_limit = map_params["limit"]
         self._move_amount = move_amount
         self._step_mul = step_mul
@@ -253,8 +257,12 @@ class StarCraft2Env(MultiSidedMultiAgentEnv):
         self.n_enemy_actions = self.n_actions_no_attack + self.n_agents
 
         # Map info
-        self._agent_race = map_params["a_race"]
-        self._bot_race = map_params["b_race"]
+        if train_enemies:
+            self._agent_race = map_params["b_race"]
+            self._bot_race = map_params["a_race"]
+        else:
+            self._agent_race = map_params["a_race"]
+            self._bot_race = map_params["b_race"]
         self.shield_bits_ally = 1 if self._agent_race == "P" else 0
         self.shield_bits_enemy = 1 if self._bot_race == "P" else 0
         self.unit_type_bits = map_params["unit_type_bits"]
@@ -321,8 +329,12 @@ class StarCraft2Env(MultiSidedMultiAgentEnv):
         
         if train_enemies:
             self.agent_index = 1
+            self.agent_team = 2
+            self.enemy_team = 1
         else:
             self.agent_index = 0
+            self.agent_team = 1
+            self.enemy_team = 2
         
         self._interface_options = [
             sc_pb.InterfaceOptions(raw=True, score=False) for i in range(self._n_players)]
@@ -483,7 +495,7 @@ class StarCraft2Env(MultiSidedMultiAgentEnv):
         try:
             self._kill_all_units()
             self._parallel.run((c.step, 2) for c in self._controllers)
-        except (protocol.ProtocolError, protocol.ConnectionError): # THIS THINGGGG
+        except (protocol.ProtocolError, protocol.ConnectionError):
             self.full_restart()
 
     def full_restart(self):
@@ -1850,7 +1862,7 @@ class StarCraft2Env(MultiSidedMultiAgentEnv):
             ally_units = [
                 unit
                 for unit in self._obs.observation.raw_data.units
-                if unit.owner == 1
+                if unit.owner == self.agent_team
             ]
             ally_units_sorted = sorted(
                 ally_units,
@@ -1871,7 +1883,7 @@ class StarCraft2Env(MultiSidedMultiAgentEnv):
                     )
 
             for unit in self._obs.observation.raw_data.units:
-                if unit.owner == 2:
+                if unit.owner == self.enemy_team: 
                     self.enemies[len(self.enemies)] = unit
                     if self._episode_count == 0:
                         self.max_reward += unit.health_max + unit.shield_max
@@ -1890,19 +1902,22 @@ class StarCraft2Env(MultiSidedMultiAgentEnv):
             ] + [
                 unit.unit_type
                 for unit in self._obs.observation.raw_data.units
-                if unit.owner == 2
+                if unit.owner == self.enemy_team
             ]
 
             if all_agents_created and all_enemies_created:  # all good
                 return
 
-            for controller in self._controllers: # dont feel good abt looping through the controllers when they are parralel
-                try:
-                    controller.step(1)
-                    self._obs = controller.observe()
-                except (protocol.ProtocolError, protocol.ConnectionError):
-                    self.full_restart()
-                    self.reset()
+                
+                
+            # for controller in self._controllers: # dont feel good abt looping through the controllers when they are parralel
+            try:
+                self._parallel.run((c.step, 1) for c in self._controllers)
+                # controller.step(1)
+                self._obs = self._controllers[self.agent_index].observe()
+            except (protocol.ProtocolError, protocol.ConnectionError):
+                self.full_restart()
+                self.reset()
 
     def get_unit_types(self):
         if self._unit_types is None:
