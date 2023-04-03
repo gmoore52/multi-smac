@@ -12,11 +12,29 @@ class SMACMap(lib.Map):
     step_mul = 8
     game_steps_per_episode = 0
 
-
+# WARNING Currently ALL DEFAULT MAPS are incompatible with the Multi-SMAC interface, use modified maps or 3m_v4m
 map_param_registry = {
     "3m": {
         "n_agents": 3,
         "n_enemies": 3,
+        "limit": 60,
+        "a_race": "T",
+        "b_race": "T",
+        "unit_type_bits": 0,
+        "map_type": "marines",
+    },
+    "3m_v4m": {
+        "n_agents": 3,
+        "n_enemies": 4,
+        "limit": 60,
+        "a_race": "T",
+        "b_race": "T",
+        "unit_type_bits": 0,
+        "map_type": "marines",
+    },
+    "5m_v4m": {
+        "n_agents": 5,
+        "n_enemies": 4,
         "limit": 60,
         "a_race": "T",
         "b_race": "T",
