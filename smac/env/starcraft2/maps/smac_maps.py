@@ -12,7 +12,7 @@ class SMACMap(lib.Map):
     step_mul = 8
     game_steps_per_episode = 0
 
-# WARNING Currently ALL DEFAULT MAPS are incompatible with the Multi-SMAC interface, use modified maps or 3m_v4m
+# WARNING Currently ALL DEFAULT MAPS are incompatible with the Multi-SMAC interface, use modified maps or 5m_v4m
 map_param_registry = {
     "3m": {
         "n_agents": 3,
