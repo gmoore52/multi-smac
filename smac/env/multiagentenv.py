@@ -3,8 +3,8 @@ from __future__ import division
 from __future__ import print_function
 
 
-class MultiAgentEnv(object):
-    def step(self, actions):
+class MultiSidedMultiAgentEnv(object):
+    def step(self, LeftActions, RightActions):
         """Returns reward, terminated, info."""
         raise NotImplementedError
 
