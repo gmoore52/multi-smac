@@ -47,8 +47,8 @@ class StarCraft2Renderer:
         self.mode = mode
         self.obs = None
         self._window_scale = 0.75
-        self.game_info = game_info = self.env._controller.game_info()
-        self.static_data = self.env._controller.data()
+        self.game_info = game_info = self.env._controllers[0].game_info()
+        self.static_data = self.env._controllers[0].data()
 
         self._obs_queue = queue.Queue()
         self._game_times = collections.deque(
