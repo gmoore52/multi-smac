@@ -2,7 +2,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from .multiagentenv_mplayer import MultiAgentEnv
+from .multiagentenv_multiplayer import MultiAgentEnv
 from .smac_maps import get_map_params
 
 import atexit
@@ -26,7 +26,7 @@ from s2clientprotocol import debug_pb2 as d_pb
 
 import random
 from gym.spaces import Discrete
-from onpolicy.algorithms.r_mappo.algorithm.influence_map import InfluenceMap
+# from onpolicy.algorithms.r_mappo.algorithm.influence_map import InfluenceMap
 
 races = {
     "R": sc_common.Random,
@@ -63,7 +63,7 @@ class Direction(enum.IntEnum):
     WEST = 3
 
 
-class StarCraft2EnvMPlayer(MultiAgentEnv):
+class StarCraft2Env(MultiAgentEnv):
     """The StarCraft II environment for decentralised multi-agent
     micromanagement scenarios.
     """
@@ -91,6 +91,9 @@ class StarCraft2EnvMPlayer(MultiAgentEnv):
         state_timestep_number=False,
         state_agent_id=True,
         reward_sparse=False,
+        reward_only_positive=True,
+        reward_death_value=10,
+        reward_win=200,
         reward_defeat=0,
         reward_negative_scale=0.5,
         reward_scale=True,
@@ -103,7 +106,8 @@ class StarCraft2EnvMPlayer(MultiAgentEnv):
         heuristic_rest=False,
         debug=False,
         n_players=2,
-        train_enemies=True
+        train_enemies=True,
+        closest_attack = True
     ):
         """
         Create a StarCraftC2Env environment.
@@ -216,14 +220,18 @@ class StarCraft2EnvMPlayer(MultiAgentEnv):
         self.use_mustalive = args.use_mustalive
         self.add_center_xy = args.add_center_xy
         self.use_stacked_frames = args.use_stacked_frames
-        self.use_influence_map = args.use_influence_map
-        self.use_influence_map_critic = args.use_influence_map_critic
-        self.closest_attack = args.closest_attack
-        self.stacked_frames = args.stacked_frames
+        # self.use_influence_map = args.use_influence_map
+        # self.use_influence_map_critic = args.use_influence_map_critic
+        self.closest_attack = closest_attack
+        # self.stacked_frames = args.stacked_frames
         
         map_params = get_map_params(self.map_name)
-        self.n_agents = map_params["n_agents"]
-        self.n_enemies = map_params["n_enemies"]
+        if train_enemies:
+           self.n_agents = map_params["n_enemies"]
+           self.n_enemies = map_params["n_agents"]
+        else:
+            self.n_agents = map_params["n_agents"]
+            self.n_enemies = map_params["n_enemies"]
         self.episode_limit = map_params["limit"]
         self._move_amount = move_amount
         self._step_mul = step_mul
@@ -249,17 +257,17 @@ class StarCraft2EnvMPlayer(MultiAgentEnv):
             self.obs_own_health = True
         self.n_obs_pathing = 8
         self.n_obs_height = 9
-        self.normalize_influence_map = args.normalize_influence_map
+        # self.normalize_influence_map = args.normalize_influence_map
 
-        if self.use_influence_map:
-            self.influence_map = InfluenceMap(normalize=self.normalize_influence_map, display_image=False, save_image=False) # Define the influence map.
+        # if self.use_influence_map:
+        #     self.influence_map = InfluenceMap(normalize=self.normalize_influence_map, display_image=False, save_image=False) # Define the influence map.
 
         # Rewards args
         self.reward_sparse = reward_sparse
-        self.reward_only_positive = args.reward_only_positive
+        self.reward_only_positive = reward_only_positive
         self.reward_negative_scale = reward_negative_scale
-        self.reward_death_value = args.reward_death_value
-        self.reward_win = args.reward_win
+        self.reward_death_value = reward_death_value #args.reward_death_value if args.reward_death_value else 10
+        self.reward_win = reward_win
         self.reward_defeat = reward_defeat
 
         self.reward_scale = reward_scale
@@ -284,8 +292,12 @@ class StarCraft2EnvMPlayer(MultiAgentEnv):
         self.n_enemy_actions = self.n_actions_no_attack + self.n_agents
 
         # Map info
-        self._agent_race = map_params["a_race"]
-        self._bot_race = map_params["b_race"]
+        if train_enemies:
+            self._agent_race = map_params["a_race"]
+            self._bot_race = map_params["b_race"]
+        else:
+            self._agent_race = map_params["a_race"]
+            self._bot_race = map_params["b_race"]
         self.shield_bits_ally = 1 if self._agent_race == "P" else 0
         self.shield_bits_enemy = 1 if self._bot_race == "P" else 0
         self.unit_type_bits = map_params["unit_type_bits"]
@@ -295,7 +307,15 @@ class StarCraft2EnvMPlayer(MultiAgentEnv):
         self.max_reward = (
             self.n_enemies * self.reward_death_value + self.reward_win
         )
-
+        
+        self.ally_state_attr_names = [
+            "health",
+            "energy/cooldown",
+            "rel_x",
+            "rel_y"
+        ]
+        self.enemy_state_attr_names = ["health", "rel_x", "rel_y"]
+        
         self.agents = {}
         self.enemies = {}
         self._episode_count = 0
@@ -312,6 +332,7 @@ class StarCraft2EnvMPlayer(MultiAgentEnv):
         self.previous_ally_units = None
         self.previous_enemy_units = None
         self.last_action = np.zeros((self.n_agents, self.n_actions), dtype=np.float32)
+        self.last_action_enemy = np.zeros((self.n_enemies, self.n_actions), dtype=np.float32)
         self._min_unit_type = 0
         self.marine_id = self.marauder_id = self.medivac_id = 0
         self.hydralisk_id = self.zergling_id = self.baneling_id = 0
@@ -331,19 +352,17 @@ class StarCraft2EnvMPlayer(MultiAgentEnv):
 
         if train_enemies:
             self.agent_index = 1
+            self.agent_team = 2
+            self.enemy_team = 1
         else:
             self.agent_index = 0
+            self.agent_team = 1
+            self.enemy_team = 2
         
         self._interface_options = [
             sc_pb.InterfaceOptions(raw=True, score=False) for i in range(self._n_players)]
 
-        self.ally_state_attr_names = [
-            "health",
-            "energy/cooldown",
-            "rel_x",
-            "rel_y"
-        ]
-        self.enemy_state_attr_names = ["health", "rel_x", "rel_y"]
+        
 
         if self.shield_bits_ally > 0:
             self.ally_state_attr_names += ["shield"]
@@ -500,6 +519,7 @@ class StarCraft2EnvMPlayer(MultiAgentEnv):
         self.defeat_counted = False
 
         self.last_action = np.zeros((self.n_agents, self.n_actions), dtype=np.float32)
+        self.last_action_enemy = np.zeros((self.n_agents, self.n_actions), dtype=np.float32)
 
         if self.heuristic_ai:
             self.heuristic_targets = [None] * self.n_agents
@@ -514,37 +534,44 @@ class StarCraft2EnvMPlayer(MultiAgentEnv):
         available_actions = []
         for i in range(self.n_agents):
             available_actions.append(self.get_avail_agent_actions(i))
+            
+        avail_actions_enemy = []
+        for i in range(self.n_enemies):
+            avail_actions_enemy.append(self.get_avail_enemy_actions(i))
 
         if self.debug:
             logging.debug("Started Episode {}"
                           .format(self._episode_count).center(60, "*"))
 
         if self.use_state_agent:
-            global_state = [self.get_state_agent(agent_id) for agent_id in range(self.n_agents)]
+            agent_global_state = [self.get_state_agent(agent_id) for agent_id in range(self.n_agents)]
+            enemy_global_state = [self.get_opponent_state(e_id) for e_id in range(self.n_enemies)]
         else:
-            global_state = [self.get_state(agent_id) for agent_id in range(self.n_agents)]
+            agent_global_state = [self.get_state(agent_id) for agent_id in range(self.n_agents)]
+            enemy_global_state = [self.get_opponent_state(e_id) for e_id in range(self.n_enemies)]
 
         local_obs = self.get_obs()
+        enemy_obs = self.get_enemy_obs()
 
-        if self.use_influence_map:
-            self.influence_map.setup_env_and_influence_map(self)
-            self.influence_map.updateInfluenceMap(self)
-            self.influence_map.updateLocalInfluenceMap(local_obs)
-            local_obs = np.array([self.influence_map.get_combined_local_obs_and_influence_map(local_obs[i],i) for i in range(len(local_obs))])
-            if self.use_influence_map_critic:
-                global_state = local_obs
+        # if self.use_influence_map:
+        #     self.influence_map.setup_env_and_influence_map(self)
+        #     self.influence_map.updateInfluenceMap(self)
+        #     self.influence_map.updateLocalInfluenceMap(local_obs)
+        #     local_obs = np.array([self.influence_map.get_combined_local_obs_and_influence_map(local_obs[i],i) for i in range(len(local_obs))])
+        #     if self.use_influence_map_critic:
+        #         agent_global_state = local_obs
 
         if self.use_stacked_frames:
             self.stacked_local_obs = np.roll(self.stacked_local_obs, 1, axis=1)
             self.stacked_global_state = np.roll(self.stacked_global_state, 1, axis=1)
 
             self.stacked_local_obs[:, -1, :] = np.array(local_obs).copy()
-            self.stacked_global_state[:, -1, :] = np.array(global_state).copy()
+            self.stacked_global_state[:, -1, :] = np.array(agent_global_state).copy()
 
             local_obs = self.stacked_local_obs.reshape(self.n_agents, -1)
-            global_state = self.stacked_global_state.reshape(self.n_agents, -1)
+            agent_global_state = self.stacked_global_state.reshape(self.n_agents, -1)
 
-        return local_obs, global_state, available_actions
+        return local_obs, enemy_obs, agent_global_state, enemy_global_state, available_actions, avail_actions_enemy
 
     def _restart(self):
         """Restart the environment by killing all units on the map.
@@ -651,9 +678,11 @@ class StarCraft2EnvMPlayer(MultiAgentEnv):
                 available_enemy_actions.append(self.get_avail_enemy_actions(i))
 
             if self.use_state_agent:
-                global_state = [self.get_state_agent(agent_id) for agent_id in range(self.n_agents)]
+                agent_global_state = [self.get_state_agent(agent_id) for agent_id in range(self.n_agents)]
+                enemy_global_state = [self.get_opponent_state(e_id) for e_id in range(self.n_enemies)]
             else:
-                global_state = [self.get_state(agent_id) for agent_id in range(self.n_agents)]
+                agent_global_state = [self.get_state(agent_id) for agent_id in range(self.n_agents)]
+                enemy_global_state = [self.get_opponent_state(e_id) for e_id in range(self.n_enemies)]
 
             local_obs = self.get_obs()
             enemy_obs = self.get_enemy_obs()
@@ -666,18 +695,18 @@ class StarCraft2EnvMPlayer(MultiAgentEnv):
                 self.stacked_global_state[:, -1, :] = np.array(global_state).copy()
 
                 local_obs = self.stacked_local_obs.reshape(self.n_agents, -1)
-                global_state = self.stacked_global_state.reshape(self.n_agents, -1)
+                agent_global_state = self.stacked_global_state.reshape(self.n_agents, -1)
 
-            if self.use_influence_map:
-                self.influence_map.updateInfluenceMap(self)
-                self.influence_map.updateLocalInfluenceMap(local_obs)
-                self.influence_map.updateLocalEnemyInfluenceMap(enemy_obs)
-                local_obs = np.array([self.influence_map.get_combined_local_obs_and_influence_map(local_obs[i],i) for i in range(len(local_obs))])
-                enemy_obs = np.array([self.influence_map.get_combined_enemy_obs_and_influence_map(enemy_obs[i],i) for i in range(len(enemy_obs))])
-                if self.use_influence_map_critic:
-                    global_state = local_obs
+            # if self.use_influence_map:
+            #     self.influence_map.updateInfluenceMap(self)
+            #     self.influence_map.updateLocalInfluenceMap(local_obs)
+            #     self.influence_map.updateLocalEnemyInfluenceMap(enemy_obs)
+            #     local_obs = np.array([self.influence_map.get_combined_local_obs_and_influence_map(local_obs[i],i) for i in range(len(local_obs))])
+            #     enemy_obs = np.array([self.influence_map.get_combined_enemy_obs_and_influence_map(enemy_obs[i],i) for i in range(len(enemy_obs))])
+            #     if self.use_influence_map_critic:
+            #         global_state = local_obs
 
-            return local_obs, enemy_obs, global_state, [[0]]*self.n_agents, dones, infos, available_actions, available_enemy_actions
+            return local_obs, enemy_obs, agent_global_state, enemy_global_state, [[0]]*self.n_agents, dones, infos, available_actions, available_enemy_actions
 
         self._total_steps += 1
         self._episode_steps += 1
@@ -758,6 +787,7 @@ class StarCraft2EnvMPlayer(MultiAgentEnv):
 
         local_obs = self.get_obs()
         enemy_obs = self.get_enemy_obs()
+        enemy_global_state = [self.get_opponent_state(e_id) for e_id in range(self.n_enemies)]
 
         if self.use_stacked_frames:
             self.stacked_local_obs = np.roll(self.stacked_local_obs, 1, axis=1)
@@ -769,16 +799,16 @@ class StarCraft2EnvMPlayer(MultiAgentEnv):
             local_obs = self.stacked_local_obs.reshape(self.n_agents, -1)
             global_state = self.stacked_global_state.reshape(self.n_agents, -1)
 
-        if self.use_influence_map:
-            self.influence_map.updateInfluenceMap(self)
-            self.influence_map.updateLocalInfluenceMap(local_obs)
-            self.influence_map.updateLocalEnemyInfluenceMap(enemy_obs)
-            local_obs = np.array([self.influence_map.get_combined_local_obs_and_influence_map(local_obs[i],i) for i in range(len(local_obs))])
-            enemy_obs = np.array([self.influence_map.get_combined_enemy_obs_and_influence_map(enemy_obs[i],i) for i in range(len(enemy_obs))])
-            if self.use_influence_map_critic:
-                global_state = local_obs
+        # if self.use_influence_map:
+        #     self.influence_map.updateInfluenceMap(self)
+        #     self.influence_map.updateLocalInfluenceMap(local_obs)
+        #     self.influence_map.updateLocalEnemyInfluenceMap(enemy_obs)
+        #     local_obs = np.array([self.influence_map.get_combined_local_obs_and_influence_map(local_obs[i],i) for i in range(len(local_obs))])
+        #     enemy_obs = np.array([self.influence_map.get_combined_enemy_obs_and_influence_map(enemy_obs[i],i) for i in range(len(enemy_obs))])
+        #     if self.use_influence_map_critic:
+        #         global_state = local_obs
 
-        return local_obs, enemy_obs, global_state, rewards, dones, infos, available_actions, available_enemy_actions
+        return local_obs, enemy_obs, global_state, enemy_global_state, rewards, dones, infos, available_actions, available_enemy_actions
 
     def get_agent_action(self, a_id, action):
         """Construct the action for agent a_id."""
@@ -1894,6 +1924,183 @@ class StarCraft2EnvMPlayer(MultiAgentEnv):
                 logging.debug("Last actions {}".format(self.last_action))
 
         return state
+    
+    
+    def get_opponent_state(self, agent_id=-1):
+        """Returns the global state.
+        NOTE: This functon should not be used during decentralised execution.
+        """
+        if self.obs_instead_of_state:
+            obs_concat = np.concatenate(self.get_enemys_obs(), axis=0).astype(np.float32)
+            return obs_concat
+
+        nf_al = 2 + self.shield_bits_enemy + self.unit_type_bits
+        nf_en = 1 + self.shield_bits_ally + self.unit_type_bits
+
+        if self.add_center_xy:
+            nf_al += 2
+            nf_en += 2
+
+        if self.add_distance_state:
+            nf_al += 1
+            nf_en += 1
+
+        if self.add_xy_state:
+            nf_al += 2
+            nf_en += 2
+
+        if self.add_visible_state:
+            nf_al += 1
+            nf_en += 1
+
+        if self.state_last_action:
+            nf_al += self.n_actions
+            nf_en += self.n_actions
+
+        if self.add_enemy_action_state:
+            nf_en += 1
+
+        nf_mv = self.get_state_move_feats_size()
+
+        ally_state = np.zeros((self.n_enemies, nf_al), dtype=np.float32)
+        enemy_state = np.zeros((self.n_agents, nf_en), dtype=np.float32)
+        move_state = np.zeros((1, nf_mv), dtype=np.float32)
+        agent_id_feats = np.zeros((self.n_enemies, 1), dtype=np.float32)
+
+        center_x = self.map_x / 2
+        center_y = self.map_y / 2
+
+        unit = self.get_enemy_by_id(agent_id)# get the unit of some agent 
+        x = unit.pos.x
+        y = unit.pos.y
+        sight_range = self.unit_sight_range(agent_id)
+        avail_actions = self.get_avail_enemy_actions(agent_id) 
+
+        if (self.use_mustalive and unit.health > 0) or (not self.use_mustalive): # or else all zeros
+            # Movement features
+            for m in range(self.n_actions_move):
+                move_state[0, m] = avail_actions[m + 2]
+
+            ind = self.n_actions_move
+
+            if self.state_pathing_grid:
+                move_state[0, ind: ind + self.n_obs_pathing] = self.get_surrounding_pathing(unit)
+                ind += self.n_obs_pathing
+
+            if self.state_terrain_height:
+                move_state[0, ind:] = self.get_surrounding_height(unit)
+                                      
+            for al_id, al_unit in self.enemies.items():
+                if al_unit.health > 0:
+                    al_x = al_unit.pos.x
+                    al_y = al_unit.pos.y
+                    max_cd = self.unit_max_cooldown(al_unit)
+                    dist = self.distance(x, y, al_x, al_y)
+
+                    ally_state[al_id, 0] = (al_unit.health / al_unit.health_max)  # health
+                    if (self.map_type == "MMM" and al_unit.unit_type == self.medivac_id):
+                        ally_state[al_id, 1] = al_unit.energy / max_cd  # energy
+                    else:
+                        ally_state[al_id, 1] = (al_unit.weapon_cooldown / max_cd)  # cooldown
+                    
+                    ind = 2
+                    
+                    if self.add_center_xy:
+                        ally_state[al_id, ind] = (al_x - center_x) / self.max_distance_x  # center X
+                        ally_state[al_id, ind+1] = (al_y - center_y) / self.max_distance_y  # center Y
+                        ind += 2
+
+                    if self.shield_bits_ally > 0:
+                        max_shield = self.unit_max_shield(al_unit)
+                        ally_state[al_id, ind] = (al_unit.shield / max_shield)  # shield
+                        ind += 1
+
+                    if self.unit_type_bits > 0:
+                        type_id = self.get_unit_type_id(al_unit, True)
+                        ally_state[al_id, ind + type_id] = 1
+
+                    if unit.health > 0:
+                        ind += self.unit_type_bits
+                        if self.add_distance_state:
+                            ally_state[al_id, ind] = dist / sight_range  # distance
+                            ind += 1
+                        if self.add_xy_state:
+                            ally_state[al_id, ind] = (al_x - x) / sight_range  # relative X
+                            ally_state[al_id, ind + 1] = (al_y - y) / sight_range  # relative Y
+                            ind += 2
+                        if self.add_visible_state:
+                            if dist < sight_range:
+                                ally_state[al_id, ind] = 1 # visible
+                            ind += 1
+                        if self.state_last_action:
+                            ally_state[al_id, ind:] = self.last_action[al_id]
+
+            for e_id, e_unit in self.agents.items():
+                if e_unit.health > 0:
+                    e_x = e_unit.pos.x
+                    e_y = e_unit.pos.y
+                    dist = self.distance(x, y, e_x, e_y)
+
+                    enemy_state[e_id, 0] = (e_unit.health / e_unit.health_max)  # health               
+                    
+                    ind = 1
+                    if self.add_center_xy:
+                        enemy_state[e_id, ind] = (e_x - center_x) / self.max_distance_x  # center X
+                        enemy_state[e_id, ind+1] = (e_y - center_y) / self.max_distance_y  # center Y
+                        ind += 2
+                        
+                    if self.shield_bits_enemy > 0:
+                        max_shield = self.unit_max_shield(e_unit)
+                        enemy_state[e_id, ind] = (e_unit.shield / max_shield)  # shield
+                        ind += 1
+
+                    if self.unit_type_bits > 0:
+                        type_id = self.get_unit_type_id(e_unit, False)
+                        enemy_state[e_id, ind + type_id] = 1
+
+                    if unit.health > 0:
+                        ind += self.unit_type_bits
+                        if self.add_distance_state:
+                            enemy_state[e_id, ind] = dist / sight_range  # distance
+                            ind += 1
+                        if self.add_xy_state:
+                            enemy_state[e_id, ind] = (e_x - x) / sight_range  # relative X
+                            enemy_state[e_id, ind + 1] = (e_y - y) / sight_range  # relative Y
+                            ind += 2
+                        if self.add_visible_state:
+                            if dist < sight_range:
+                                enemy_state[e_id, ind] = 1 # visible
+                            ind += 1
+                        if self.add_enemy_action_state:
+                            enemy_state[e_id, ind] = avail_actions[self.n_actions_no_attack + e_id]  # available
+
+        state = np.append(ally_state.flatten(), enemy_state.flatten())
+               
+        if self.add_move_state:
+            state = np.append(state, move_state.flatten())
+
+        if self.add_local_obs:
+            state = np.append(state, self.get_obs_enemy(agent_id).flatten())
+
+        if self.state_timestep_number:
+            state = np.append(state, self._episode_steps / self.episode_limit)
+
+        if self.add_agent_id:
+            agent_id_feats[agent_id] = 1.0
+            state = np.append(state, agent_id_feats.flatten())
+
+        state = state.astype(dtype=np.float32)
+
+        if self.debug:
+            logging.debug("STATE".center(60, "-"))
+            logging.debug("Ally state {}".format(ally_state))
+            logging.debug("Enemy state {}".format(enemy_state))
+            logging.debug("Move state {}".format(move_state))
+            if self.state_last_action:
+                logging.debug("Last actions {}".format(self.last_action))
+
+        return state
+    
 
     def get_state_original(self):
         """Returns the global state.
@@ -2682,7 +2889,7 @@ class StarCraft2EnvMPlayer(MultiAgentEnv):
             ally_units = [
                 unit
                 for unit in self._obs.observation.raw_data.units
-                if unit.owner == 1
+                if unit.owner == self.agent_team
             ]
             ally_units_sorted = sorted(
                 ally_units,
@@ -2703,7 +2910,7 @@ class StarCraft2EnvMPlayer(MultiAgentEnv):
                     )
 
             for unit in self._obs.observation.raw_data.units:
-                if unit.owner == 2:
+                if unit.owner == self.enemy_team:
                     self.enemies[len(self.enemies)] = unit
                     if self._episode_count == 0:
                         self.max_reward += unit.health_max + unit.shield_max
@@ -2716,17 +2923,26 @@ class StarCraft2EnvMPlayer(MultiAgentEnv):
 
             all_agents_created = (len(self.agents) == self.n_agents)
             all_enemies_created = (len(self.enemies) == self.n_enemies)
+            
+            self._unit_types = [
+                unit.unit_type for unit in ally_units_sorted
+            ] + [
+                unit.unit_type
+                for unit in self._obs.observation.raw_data.units
+                if unit.owner == self.enemy_team
+            ]
 
             if all_agents_created and all_enemies_created:  # all good
                 return
 
-            for controller in self._controllers:
-                try:
-                    controller.step(1)
-                    self._obs = controller.observe()
-                except (protocol.ProtocolError, protocol.ConnectionError):
-                    self.full_restart()
-                    self.reset()
+            # for controller in self._controllers:
+            try:
+                self._parallel.run((c.step, 1) for c in self._controllers)
+                # controller.step(1)
+                self._obs = self._controllers[self.agent_index].observe()
+            except (protocol.ProtocolError, protocol.ConnectionError):
+                self.full_restart()
+                self.reset()
 
     def update_units(self):
         """Update units after an environment step.
