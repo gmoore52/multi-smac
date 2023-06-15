@@ -66,7 +66,8 @@ Please install StarCraft II from [Battle.net](https://battle.net). The free [Sta
 
 SMAC is composed of many combat scenarios with pre-configured maps. Before SMAC can be used, these maps need to be downloaded into the `Maps` directory of StarCraft II.
 
-Download the [SMAC Maps](https://github.com/oxwhirl/smac/releases/download/v0.1-beta1/SMAC_Maps.zip) and extract them to your `$SC2PATH/Maps` directory. If you installed SMAC via git, simply copy the `SMAC_Maps` directory from `smac/env/starcraft2/maps/` into `$SC2PATH/Maps` directory.
+Download the [M-SMAC Maps](https://github.com/gmoore52/multi-smac/files/11762176/MP_SMAC_Maps.zip) and extract them to your `$SC2PATH/Maps` directory. If you installed SMAC via git, simply copy the `SMAC_Maps` directory from `smac/env/starcraft2/maps/` into `$SC2PATH/Maps` directory. (These maps are modified versions of the existing SMAC maps)
+
 
 ### List the maps
 
